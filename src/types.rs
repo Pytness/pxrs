@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::io::Read;
 
 // The equivalent structure in Rust using idiomatic features
@@ -78,7 +79,104 @@ impl PxHeader {
     }
 }
 
+impl Display for PxHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "{:<20}Paradox {}",
+            "File-Version:",
+            match self.file_version_id {
+                0x03 => "3.0",
+                0x04 => "3.5",
+                0x05..=0x09 => "4.x",
+                0x0a | 0x0b => "5.x",
+                0x0c => "7.x",
+                _ => "Unknown",
+            }
+        )?;
+        writeln!(
+            f,
+            "{:<20}{}",
+            "Filetype:",
+            match self.file_type {
+                0x00 => "indexed .DB",
+                0x01 => "primary index .PX",
+                0x02 => "non indexed .DB",
+                0x03 => "non-incrementing secondary index .Xnn",
+                0x04 => "secondary index .Ynn (inc/non-inc)",
+                0x05 => "incrementing secondary index .Xnn",
+                0x06 => "non-incrementing secondary index .XGn",
+                0x07 => "secondary index .YGn (inc/non-inc)",
+                0x08 => "incrementing secondary index .XGn",
+                _ => "Unknown",
+            }
+        )?;
+        writeln!(
+            f,
+            "{:<20}{}",
+            "Tablename:",
+            String::from_utf8_lossy(&self.table_name)
+        )?;
+        writeln!(
+            f,
+            "{:<20}{}",
+            "Sort-Order:",
+            match self.sort_order {
+                0x00 => "ASCII",
+                0xb7 => "International",
+                0x82 | 0xe6 => "Norwegian/Danish",
+                0x0b => "Swedish/Finnish",
+                0x5d => "Spanish",
+                0x62 => "PDX ANSI intl",
+                _ => "Unknown",
+            }
+        )?;
+        writeln!(
+            f,
+            "{:<20}{}",
+            "Write-Protection:",
+            match self.write_protected {
+                0x00 => "off",
+                0x01 => "on",
+                _ => "Unknown",
+            }
+        )?;
+
+        if self.file_version_id >= 0x05
+            && self.file_type != 0x01
+            && self.file_type != 0x04
+            && self.file_type != 0x07
+        {
+            writeln!(
+                f,
+                "{:<20}{}",
+                "Codepage:",
+                match self.dos_global_code_page {
+                    0x01b5 => "United States",
+                    0x04e4 => "Spain",
+                    _ => "Unknown",
+                }
+            )?;
+        }
+
+        writeln!(f, "{:<20}{}", "Number of Blocks:", self.file_blocks)?;
+        writeln!(f, "{:<20}{}", "Used Blocks:", self.used_blocks)?;
+        writeln!(f, "{:<20}{}", "First Block:", self.first_block)?;
+        writeln!(f, "{:<20}{}", "Number of Records:", self.num_records)?;
+        writeln!(f, "{:<20}{}", "Max. Tablesize:", self.max_table_size)?;
+        writeln!(f, "{:<20}{}", "Recordsize:", self.record_size)?;
+
+        if self.file_type == 0x01 {
+            writeln!(f, "{:<20}{}", "Index-root:", self.index_root_block)?;
+            writeln!(f, "{:<20}{}", "Index-levels:", self.index_levels)?;
+        }
+
+        Ok(())
+    }
+}
+
 // Field information structure
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct PxFieldInfo {
