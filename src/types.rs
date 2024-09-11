@@ -1,8 +1,44 @@
+use byte::ctx::{Str, NULL};
+use byte::*;
 use std::fmt::Display;
 use std::io::Read;
+use std::mem::MaybeUninit;
+use std::ptr::addr_of_mut;
 
-// The equivalent structure in Rust using idiomatic features
-#[repr(C)] // Ensures the struct is laid out like in C
+use self::ctx::Endian;
+
+#[derive(Debug, Clone, Default, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version(pub u8);
+
+impl Version {
+    pub fn is_supported(&self) -> bool {
+        matches!(self.0, 0x03..=0x0c)
+    }
+}
+
+impl<'a> TryRead<'a, Endian> for Version {
+    fn try_read(bytes: &'a [u8], ctx: Endian) -> Result<(Self, usize)> {
+        let (version, size) = u8::try_read(bytes, ctx)?;
+        Ok((Version(version), size))
+    }
+}
+
+impl Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let version = match self.0 {
+            0x03 => "3.0",
+            0x04 => "3.5",
+            0x05..=0x09 => "4.x",
+            0x0a | 0x0b => "5.x",
+            0x0c => "7.x",
+            _ => "Unknown",
+        };
+
+        write!(f, "{} | {:02x}", version, self.0)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PxHeader {
     pub record_size: i16,             // 0x00: signed short
     pub header_size: i16,             // 0x02: signed short
@@ -32,7 +68,7 @@ pub struct PxHeader {
     pub table_name_ptr: u32,          // 0x30: unsigned int (char**)
     pub field_info: u32,              // 0x34: unsigned int (void*)
     pub write_protected: u8,          // 0x38: unsigned char
-    pub file_version_id: u8,          // 0x39: unsigned char
+    pub file_version_id: Version,     // 0x39: unsigned char
     pub max_blocks: u16,              // 0x3a: unsigned short
     pub dummy_7: u8,                  // 0x3c: unsigned char
     pub aux_passwords: u8,            // 0x3d: unsigned char
@@ -59,21 +95,97 @@ pub struct PxHeader {
     pub change_count4: u16,           // 0x70: unsigned short
     pub dummy_f: u32,                 // 0x72: unsigned int
     pub dummy_10: u16,                // 0x76: unsigned short
-    pub table_name: [u8; 79],         // ----: char[79]
+    pub table_name: String,           // ----: char[79]
+}
+
+impl Default for PxHeader {
+    fn default() -> Self {
+        unsafe {
+            let mut header = MaybeUninit::<PxHeader>::uninit();
+            let ptr: *mut PxHeader = header.as_mut_ptr();
+
+            addr_of_mut!((*ptr).table_name).write(String::new());
+
+            header.assume_init()
+        }
+    }
 }
 
 impl PxHeader {
     pub fn from_reader(reader: &mut dyn Read) -> std::io::Result<Self> {
-        let mut header: Self;
-        let mut buffer = [0u8; size_of::<Self>()];
+        let mut offset = 0;
 
+        let mut buffer = [0u8; size_of::<Self>()];
         reader.read_exact(&mut buffer)?;
 
-        unsafe {
-            let ptr = buffer.as_ptr() as *const Self;
+        let mut header = PxHeader::default();
 
-            header = ptr.read_unaligned();
+        macro_rules! read_field {
+            ($field:ident) => {
+                header.$field = buffer.read_with(&mut offset, BE).unwrap();
+            };
         }
+
+        read_field!(record_size);
+        read_field!(header_size);
+        read_field!(file_type);
+        read_field!(max_table_size);
+        read_field!(num_records);
+        read_field!(used_blocks);
+        read_field!(file_blocks);
+        read_field!(first_block);
+        read_field!(last_block);
+        read_field!(dummy_1);
+        read_field!(modified_flags1);
+        read_field!(index_field_number);
+        read_field!(primary_index_workspace);
+        read_field!(dummy_2);
+        read_field!(index_root_block);
+        read_field!(index_levels);
+        read_field!(num_fields);
+        read_field!(primary_key_fields);
+        read_field!(encryption1);
+        read_field!(sort_order);
+        read_field!(modified_flags2);
+        read_field!(dummy_5);
+        read_field!(change_count1);
+        read_field!(change_count2);
+        read_field!(dummy_6);
+        read_field!(table_name_ptr);
+        read_field!(field_info);
+        read_field!(write_protected);
+        read_field!(file_version_id);
+        read_field!(max_blocks);
+        read_field!(dummy_7);
+        read_field!(aux_passwords);
+        read_field!(dummy_8);
+        read_field!(crypt_info_start);
+        read_field!(crypt_info_end);
+        read_field!(dummy_9);
+        read_field!(auto_inc);
+        read_field!(dummy_a);
+        read_field!(index_update_required);
+        read_field!(dummy_b);
+        read_field!(dummy_c);
+        read_field!(ref_integrity);
+        read_field!(dummy_d);
+        read_field!(file_version_id2);
+        read_field!(file_version_id3);
+        read_field!(encryption2);
+        read_field!(file_update_time);
+        read_field!(hi_field_id);
+        read_field!(hi_field_id_info);
+        read_field!(sometimes_num_fields);
+        read_field!(dos_global_code_page);
+        read_field!(dummy_e);
+        read_field!(change_count4);
+        read_field!(dummy_f);
+        read_field!(dummy_10);
+
+        header.table_name = buffer
+            .read_with::<&str>(&mut offset, Str::Delimiter(NULL))
+            .unwrap_or_default()
+            .to_string();
 
         Ok(header)
     }
@@ -81,23 +193,10 @@ impl PxHeader {
 
 impl Display for PxHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "File-Version: {}", self.file_version_id)?;
         writeln!(
             f,
-            "{:<20}Paradox {}",
-            "File-Version:",
-            match self.file_version_id {
-                0x03 => "3.0",
-                0x04 => "3.5",
-                0x05..=0x09 => "4.x",
-                0x0a | 0x0b => "5.x",
-                0x0c => "7.x",
-                _ => "Unknown",
-            }
-        )?;
-        writeln!(
-            f,
-            "{:<20}{}",
-            "Filetype:",
+            "Filetype: {}",
             match self.file_type {
                 0x00 => "indexed .DB",
                 0x01 => "primary index .PX",
@@ -111,16 +210,10 @@ impl Display for PxHeader {
                 _ => "Unknown",
             }
         )?;
+        writeln!(f, "Tablename: {}", &self.table_name)?;
         writeln!(
             f,
-            "{:<20}{}",
-            "Tablename:",
-            String::from_utf8_lossy(&self.table_name)
-        )?;
-        writeln!(
-            f,
-            "{:<20}{}",
-            "Sort-Order:",
+            "Sort-Order: {}",
             match self.sort_order {
                 0x00 => "ASCII",
                 0xb7 => "International",
@@ -133,8 +226,7 @@ impl Display for PxHeader {
         )?;
         writeln!(
             f,
-            "{:<20}{}",
-            "Write-Protection:",
+            "Write-Protection: {}",
             match self.write_protected {
                 0x00 => "off",
                 0x01 => "on",
@@ -142,15 +234,14 @@ impl Display for PxHeader {
             }
         )?;
 
-        if self.file_version_id >= 0x05
+        if self.file_version_id.0 >= 0x05
             && self.file_type != 0x01
             && self.file_type != 0x04
             && self.file_type != 0x07
         {
             writeln!(
                 f,
-                "{:<20}{}",
-                "Codepage:",
+                "Codepage: {}",
                 match self.dos_global_code_page {
                     0x01b5 => "United States",
                     0x04e4 => "Spain",
@@ -159,16 +250,17 @@ impl Display for PxHeader {
             )?;
         }
 
-        writeln!(f, "{:<20}{}", "Number of Blocks:", self.file_blocks)?;
-        writeln!(f, "{:<20}{}", "Used Blocks:", self.used_blocks)?;
-        writeln!(f, "{:<20}{}", "First Block:", self.first_block)?;
-        writeln!(f, "{:<20}{}", "Number of Records:", self.num_records)?;
-        writeln!(f, "{:<20}{}", "Max. Tablesize:", self.max_table_size)?;
-        writeln!(f, "{:<20}{}", "Recordsize:", self.record_size)?;
+        writeln!(f, "Number of Blocks: {}", self.file_blocks)?;
+        writeln!(f, "Used Blocks: {}", self.used_blocks)?;
+        writeln!(f, "First Block: {}", self.first_block)?;
+        writeln!(f, "Number of Records: {}", self.num_records)?;
+        writeln!(f, "Max. Tablesize: {}", self.max_table_size)?;
+        writeln!(f, "Recordsize: {}", self.record_size)?;
+        writeln!(f, "Number of fields: {}", self.num_fields)?;
 
         if self.file_type == 0x01 {
-            writeln!(f, "{:<20}{}", "Index-root:", self.index_root_block)?;
-            writeln!(f, "{:<20}{}", "Index-levels:", self.index_levels)?;
+            writeln!(f, "Index-root: {}", self.index_root_block)?;
+            writeln!(f, "Index-levels: {}", self.index_levels)?;
         }
 
         Ok(())

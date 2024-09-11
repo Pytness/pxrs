@@ -98,12 +98,9 @@ fn parse_header_v4(unp_head: &[u8], header: &mut PxHeader) {
 
 // Check if the header is supported based on fileVersionID and fileType
 fn is_header_supported(header: &PxHeader) -> bool {
-    match header.file_version_id {
-        0x03..=0x0c => (),
-        _ => {
-            eprintln!("Unknown Fileversion ID");
-            return false;
-        }
+    if !header.file_version_id.is_supported() {
+        eprintln!("Unknown Fileversion ID");
+        return false;
     }
 
     match header.file_type {
@@ -138,7 +135,7 @@ pub fn parse_complete_header(fd: &mut File, header: &mut PxHeader) -> Result<Vec
         ));
     }
 
-    if header.file_version_id >= 0x05
+    if header.file_version_id.0 >= 0x05
         && header.file_type != 0x01
         && header.file_type != 0x04
         && header.file_type != 0x07
@@ -165,7 +162,7 @@ pub fn parse_complete_header(fd: &mut File, header: &mut PxHeader) -> Result<Vec
     // Read the table name
     let mut table_name = [0u8; 79];
     fd.read_exact(&mut table_name)?;
-    header.table_name.copy_from_slice(&table_name);
+    // header.table_name.copy_from_slice(&table_name);
 
     Ok(fields)
 }
